@@ -13,7 +13,6 @@ export function PnlChartPanel() {
   const strategies = useStore((s) => s.strategies);
   const referenceId = useStore((s) => s.referenceId);
   const comparingIds = useStore((s) => s.comparingIds);
-  const tickIdx = useStore((s) => s.tickIdx);
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
 
@@ -110,7 +109,7 @@ export function PnlChartPanel() {
       width: 400,
       height: 200,
       legend: { show: true, live: true },
-      cursor: { focus: { prox: 16 }, sync: { key: "prosperity" } },
+      cursor: { focus: { prox: 16 }, drag: { x: false, y: false } },
       scales: { x: { time: false }, y: { auto: true } },
       series,
       axes: defaultAxes(prefs.normalizedX ? "%" : ""),
@@ -118,17 +117,29 @@ export function PnlChartPanel() {
     return { data, options: opts };
   }, [refStrat, strategies, comparingIds, prefs.diffMode, prefs.normalizedX, prefs.showSampled]);
 
-  // Sync crosshair on scrub — side effect, so useEffect not useMemo.
+  // Sync the crosshair to tickIdx WITHOUT re-rendering this panel on
+  // every tick. Subscribing to the store directly keeps playback fast
+  // — with 9 panels × 60fps re-renders we were pushing a lot of work
+  // through React for something that only needs a canvas redraw.
   useEffect(() => {
     if (!refStrat) return;
-    const target = prefs.normalizedX
-      ? refStrat.timestamps.length > 1
-        ? tickIdx / (refStrat.timestamps.length - 1)
-        : 0
-      : refStrat.timestamps[tickIdx] ?? 0;
-    handleRef.current &&
-      syncPlotCursorToX(handleRef.current, target);
-  }, [tickIdx, refStrat, prefs.normalizedX]);
+    const normalized = prefs.normalizedX;
+    const timestamps = refStrat.timestamps;
+    const project = (tick: number) =>
+      normalized
+        ? timestamps.length > 1
+          ? tick / (timestamps.length - 1)
+          : 0
+        : timestamps[tick] ?? 0;
+    // Move cursor to current tick immediately
+    syncPlotCursorToX(handleRef.current, project(useStore.getState().tickIdx));
+    const unsub = useStore.subscribe((state, prev) => {
+      if (state.tickIdx !== prev.tickIdx) {
+        syncPlotCursorToX(handleRef.current, project(state.tickIdx));
+      }
+    });
+    return unsub;
+  }, [refStrat, prefs.normalizedX]);
 
   return (
     <div className="flex h-full flex-col">

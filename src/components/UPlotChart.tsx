@@ -1,13 +1,13 @@
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 import uPlot, { type AlignedData, type Options } from "uplot";
 
 interface Props {
   data: AlignedData;
   options: Options;
   /**
-   * Stable ref container that receives the current uPlot instance. Must be
-   * the SAME ref across renders — don't inline `(u) => ...` or the chart will
-   * rebuild on every render.
+   * Stable ref container that receives the current uPlot instance.
+   * MUST come from useRef — passing an inline object would rebuild
+   * the chart on every render of the parent.
    */
   plotRef?: MutableRefObject<uPlot | null>;
 }
@@ -15,38 +15,56 @@ interface Props {
 /**
  * Thin wrapper around uPlot.
  *
- * Contract (hard-earned):
- * - Mount creates a uPlot instance once.
- * - `data` updates use setData().
- * - `options` updates rebuild the instance in place (uPlot has no
- *   setSeries/setScales — this is the simplest correct behavior).
- * - Parents must pass a stable `plotRef` (useRef) so this component's
- *   effects don't re-run every render.
+ * Invariants (every one of these was learned the hard way):
+ * 1. Mount creates a uPlot instance after the container has non-zero
+ *    width, so the chart's canvases are created at the right size.
+ * 2. `data` updates go through `setData()` (no teardown).
+ * 3. `options` updates rebuild the instance (uPlot has no
+ *    `setSeries`/`setScales` — in-place patching was too error-prone).
+ * 4. The render body is pure. All ref assignments happen inside
+ *    effects, so double-invocation in StrictMode can't thrash state.
+ * 5. The ResizeObserver callback is debounced inside a RAF frame so a
+ *    single layout pass doesn't trigger two setSize calls.
  */
 export function UPlotChart({ data, options, plotRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerPlotRef = useRef<uPlot | null>(null);
-  // Mirror into parent's ref if provided
-  if (plotRef && plotRef.current !== innerPlotRef.current) {
-    plotRef.current = innerPlotRef.current;
-  }
+  const dataRef = useRef<AlignedData>(data);
+  dataRef.current = data;
 
-  // Build / rebuild chart when options change.
-  useEffect(() => {
+  // Build / rebuild the chart when options change.
+  // useLayoutEffect (instead of useEffect) so we don't paint an empty
+  // stub before uPlot draws.
+  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const u = new uPlot(
-      {
-        ...options,
-        width: el.clientWidth || 400,
-        height: el.clientHeight || 200,
-      },
-      data,
-      el
-    );
-    innerPlotRef.current = u;
-    if (plotRef) plotRef.current = u;
+    // Defer if the container hasn't laid out yet — react-grid-layout's
+    // WidthProvider can mount a panel with 0 width on the very first
+    // render. Creating uPlot at 0 width produces a chart that never
+    // redraws correctly until setSize is called.
+    const firstW = el.clientWidth;
+    const firstH = el.clientHeight;
+
+    let u: uPlot | null = null;
+    const build = (w: number, h: number) => {
+      u = new uPlot({ ...options, width: w, height: h }, dataRef.current, el);
+      innerPlotRef.current = u;
+      if (plotRef) plotRef.current = u;
+    };
+
+    let pending: number | null = null;
+    if (firstW > 0 && firstH > 0) {
+      build(firstW, firstH);
+    } else {
+      // Wait one rAF for the container to lay out
+      pending = requestAnimationFrame(() => {
+        pending = null;
+        const w2 = el.clientWidth || 400;
+        const h2 = el.clientHeight || 200;
+        build(w2, h2);
+      });
+    }
 
     let rafId: number | null = null;
     const ro = new ResizeObserver(() => {
@@ -67,11 +85,14 @@ export function UPlotChart({ data, options, plotRef }: Props) {
     return () => {
       ro.disconnect();
       if (rafId != null) cancelAnimationFrame(rafId);
-      u.destroy();
+      if (pending != null) cancelAnimationFrame(pending);
+      if (u) u.destroy();
       if (innerPlotRef.current === u) innerPlotRef.current = null;
       if (plotRef && plotRef.current === u) plotRef.current = null;
     };
-    // We intentionally exclude `data` — data updates go through setData below.
+    // We intentionally exclude `data` and `plotRef` — data updates go
+    // through setData below, plotRef is a ref container that's stable
+    // across renders by contract.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options]);
 
@@ -88,7 +109,7 @@ export function UPlotChart({ data, options, plotRef }: Props) {
 /** Find the x-array index nearest to `x` and move the chart's crosshair. */
 export function syncPlotCursorToX(u: uPlot | null, x: number) {
   if (!u) return;
-  const xs = u.data[0] as number[];
+  const xs = u.data[0] as number[] | undefined;
   if (!xs || xs.length === 0) return;
   let lo = 0;
   let hi = xs.length - 1;

@@ -69,7 +69,10 @@ export default function App() {
       />
       <main className="flex min-w-0 flex-1 flex-col">
         <TopBar onShowAbout={() => setAboutOpen(true)} />
-        <div className="flex-1 overflow-auto">
+        {/* overflow-y-scroll (not overflow-auto) forces the scrollbar to
+            always be visible — prevents a ResizeObserver loop between the
+            react-grid-layout WidthProvider and scrollbar appear/disappear. */}
+        <div className="flex-1 overflow-x-hidden overflow-y-scroll">
           <Dashboard />
         </div>
       </main>

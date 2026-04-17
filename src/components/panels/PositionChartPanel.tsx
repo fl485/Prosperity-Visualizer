@@ -11,7 +11,6 @@ export function PositionChartPanel() {
   const refId = useStore((s) => s.referenceId);
   const comparing = useStore((s) => s.comparingIds);
   const selectedProduct = useStore((s) => s.selectedProduct);
-  const tickIdx = useStore((s) => s.tickIdx);
   const sampled = useStore((s) => s.prefs.showSampled);
   const handleRef = useRef<uPlot | null>(null);
 
@@ -64,7 +63,7 @@ export function PositionChartPanel() {
       width: 400,
       height: 200,
       legend: { show: true, live: true },
-      cursor: { focus: { prox: 16 }, sync: { key: "prosperity" } },
+      cursor: { focus: { prox: 16 }, drag: { x: false, y: false } },
       scales: { x: { time: false }, y: { auto: true } },
       series: [
         { label: "Timestamp" },
@@ -102,10 +101,20 @@ export function PositionChartPanel() {
     return { data, options: opts };
   }, [ref, product, strategies, comparing, sampled]);
 
+  // Cursor sync off the React render path — subscribe directly to store.
   useEffect(() => {
     if (!ref) return;
-    syncPlotCursorToX(handleRef.current, ref.timestamps[tickIdx] ?? 0);
-  }, [tickIdx, ref]);
+    const timestamps = ref.timestamps;
+    syncPlotCursorToX(
+      handleRef.current,
+      timestamps[useStore.getState().tickIdx] ?? 0
+    );
+    return useStore.subscribe((state, prev) => {
+      if (state.tickIdx !== prev.tickIdx) {
+        syncPlotCursorToX(handleRef.current, timestamps[state.tickIdx] ?? 0);
+      }
+    });
+  }, [ref]);
 
   // Redraw when the user changes the limit (band is drawn from limitRef).
   useEffect(() => {

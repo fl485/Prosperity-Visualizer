@@ -7,7 +7,6 @@ import { UPlotChart, syncPlotCursorToX } from "../UPlotChart";
 
 export function PriceChartPanel() {
   const ref = useStore(getReferenceStrategy);
-  const tickIdx = useStore((s) => s.tickIdx);
   const selectedProduct = useStore((s) => s.selectedProduct);
   const sampled = useStore((s) => s.prefs.showSampled);
   const handleRef = useRef<uPlot | null>(null);
@@ -40,7 +39,7 @@ export function PriceChartPanel() {
       width: 400,
       height: 200,
       legend: { show: true, live: true },
-      cursor: { focus: { prox: 16 }, sync: { key: "prosperity" } },
+      cursor: { focus: { prox: 16 }, drag: { x: false, y: false } },
       scales: { x: { time: false }, y: { auto: true } },
       series: [
         { label: "Timestamp" },
@@ -60,10 +59,21 @@ export function PriceChartPanel() {
     return { data, options: opts };
   }, [ref, product, sampled]);
 
+  // Cursor sync via direct store subscription so scrubbing doesn't
+  // re-render this panel on every tick.
   useEffect(() => {
     if (!ref) return;
-    syncPlotCursorToX(handleRef.current, ref.timestamps[tickIdx] ?? 0);
-  }, [tickIdx, ref]);
+    const timestamps = ref.timestamps;
+    syncPlotCursorToX(
+      handleRef.current,
+      timestamps[useStore.getState().tickIdx] ?? 0
+    );
+    return useStore.subscribe((state, prev) => {
+      if (state.tickIdx !== prev.tickIdx) {
+        syncPlotCursorToX(handleRef.current, timestamps[state.tickIdx] ?? 0);
+      }
+    });
+  }, [ref]);
 
   return (
     <div className="flex h-full flex-col">
