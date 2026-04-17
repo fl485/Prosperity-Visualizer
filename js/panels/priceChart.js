@@ -16,6 +16,9 @@ export function mountPriceChart({
   titleEl,
   legendEl,
   levelsCheck,
+  midCheck,
+  microCheck,
+  wallMidCheck,
   buysCheck,
   sellsCheck,
   botsCheck,
@@ -27,6 +30,15 @@ export function mountPriceChart({
 
   levelsCheck.addEventListener("change", () =>
     setPrefs({ priceLevels: levelsCheck.checked })
+  );
+  midCheck.addEventListener("change", () =>
+    setPrefs({ priceMid: midCheck.checked })
+  );
+  microCheck.addEventListener("change", () =>
+    setPrefs({ priceMicro: microCheck.checked })
+  );
+  wallMidCheck.addEventListener("change", () =>
+    setPrefs({ priceWallMid: wallMidCheck.checked })
   );
   buysCheck.addEventListener("change", () =>
     setPrefs({ priceBuys: buysCheck.checked })
@@ -91,12 +103,10 @@ export function mountPriceChart({
     const targetPts = state.prefs.showSampled ? 1500 : xs.length;
     const sample = (ys) => lttb(xs, ys, targetPts);
 
-    // Always-on lines: best bid, best ask, mid, micro, wall mid.
+    // Lines: best bid/ask are always on; L2/L3 and the three "mid"
+    // flavours each toggle independently via prefs.
     const bb = sample(ps.bestBid);
     const aa = sample(ps.bestAsk);
-    const m = sample(ps.midPrice);
-    const mp = sample(ps.microPrice);
-    const wm = sample(ps.wallMid ?? []);
 
     const series = [
       { name: "Best ask (L1)", color: "#f87171", width: 1.2, xs: aa.xs, ys: aa.ys },
@@ -115,25 +125,32 @@ export function mountPriceChart({
         { name: "Bid L3", color: "#34d39966", width: 1, xs: b3.xs, ys: b3.ys }
       );
     }
-    series.push(
-      { name: "Mid", color: "#a78bfa", width: 1.6, xs: m.xs, ys: m.ys },
-      {
+    if (state.prefs.priceMid !== false) {
+      const m = sample(ps.midPrice);
+      series.push({ name: "Mid", color: "#a78bfa", width: 1.6, xs: m.xs, ys: m.ys });
+    }
+    if (state.prefs.priceMicro !== false) {
+      const mp = sample(ps.microPrice);
+      series.push({
         name: "Microprice",
         color: "#2dd4bf",
         width: 1.2,
         dash: [4, 3],
         xs: mp.xs,
         ys: mp.ys,
-      },
-      {
+      });
+    }
+    if (state.prefs.priceWallMid !== false) {
+      const wm = sample(ps.wallMid ?? []);
+      series.push({
         name: "Wall mid",
         color: "#fbbf24",
         width: 1.2,
         dash: [2, 4],
         xs: wm.xs,
         ys: wm.ys,
-      }
-    );
+      });
+    }
 
     // Markers: SUBMISSION buys (^), SUBMISSION sells (v), bot trades (·).
     const markers = [];
@@ -158,30 +175,35 @@ export function mountPriceChart({
         botYs.push(t.price);
       }
     }
+    // Own trades get a fat, high-contrast style so they jump out of
+    // the noisy line series: larger shape, dark outline, bright fill.
     if (state.prefs.priceBuys)
       markers.push({
         name: "Own buys",
-        color: "#34d399",
+        color: "#4ade80",
+        outline: "#052e16",
         shape: "up",
-        size: 8,
+        size: 11,
         xs: ownBuysXs,
         ys: ownBuysYs,
       });
     if (state.prefs.priceSells)
       markers.push({
         name: "Own sells",
-        color: "#f87171",
+        color: "#fb7185",
+        outline: "#450a0a",
         shape: "down",
-        size: 8,
+        size: 11,
         xs: ownSellsXs,
         ys: ownSellsYs,
       });
     if (state.prefs.priceBots)
       markers.push({
         name: "Bot trades",
-        color: "#a1a1aa",
+        color: "#d4d4d8",
+        outline: "#18181b",
         shape: "dot",
-        size: 5,
+        size: 11,
         xs: botXs,
         ys: botYs,
       });
@@ -214,6 +236,9 @@ export function mountPriceChart({
     titleEl.textContent = `Price & Liquidity ${product ? "· " + product : ""}`;
 
     levelsCheck.checked = state.prefs.priceLevels !== false;
+    midCheck.checked = state.prefs.priceMid !== false;
+    microCheck.checked = state.prefs.priceMicro !== false;
+    wallMidCheck.checked = state.prefs.priceWallMid !== false;
     buysCheck.checked = !!state.prefs.priceBuys;
     sellsCheck.checked = !!state.prefs.priceSells;
     botsCheck.checked = !!state.prefs.priceBots;
@@ -239,6 +264,9 @@ export function mountPriceChart({
       product,
       state.prefs.showSampled,
       state.prefs.priceLevels !== false,
+      state.prefs.priceMid !== false,
+      state.prefs.priceMicro !== false,
+      state.prefs.priceWallMid !== false,
       !!state.prefs.priceBuys,
       !!state.prefs.priceSells,
       !!state.prefs.priceBots,
