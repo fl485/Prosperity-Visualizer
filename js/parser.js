@@ -216,7 +216,11 @@ export function buildStrategy(rawFile, rows, meta) {
       const kb = tickKeyOf(tradeDays[b], rawTrades[b].timestamp);
       return ka - kb || a - b;
     });
-  const tradesSorted = tradeOrder.map((i) => rawTrades[i]);
+  const tradesSorted = tradeOrder.map((i) => ({
+    ...rawTrades[i],
+    day: tradeDays[i],
+    tickKey: tickKeyOf(tradeDays[i], rawTrades[i].timestamp),
+  }));
   const tradeDaysSorted = tradeOrder.map((i) => tradeDays[i]);
 
   const ownFills = [];
