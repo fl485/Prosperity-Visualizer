@@ -365,8 +365,6 @@ export function createChart(canvas, opts = {}) {
     // Markers (scatter points drawn over the line series)
     if (model.markers) {
       for (const m of model.markers) {
-        ctx.fillStyle = m.color;
-        ctx.strokeStyle = m.color;
         const size = m.size ?? 5;
         const half = size / 2;
         const xs = m.xs;
@@ -379,7 +377,22 @@ export function createChart(canvas, opts = {}) {
           if (x < xmin || x > xmax) continue;
           const X = px(x);
           const Y = py(y);
+          // Optional dark outline (enlarged shape first) so markers pop
+          // on top of busy line series. Opt in via m.outline.
+          if (m.outline) {
+            ctx.fillStyle = m.outline;
+            drawMarker(ctx, X, Y, m.shape ?? "dot", size + 3, half + 1.5);
+          }
+          ctx.fillStyle = m.color;
           drawMarker(ctx, X, Y, m.shape ?? "dot", size, half);
+          // Optional white-ish ring on top for double-pop contrast.
+          if (m.ring) {
+            ctx.strokeStyle = m.ring;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(X, Y, half + 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+          }
         }
       }
     }
