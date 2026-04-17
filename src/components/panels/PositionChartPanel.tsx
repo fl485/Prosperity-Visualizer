@@ -1,9 +1,8 @@
-import { useMemo, useRef } from "react";
-import type uPlot from "uplot";
+import { useEffect, useMemo, useRef } from "react";
 import type { AlignedData, Options } from "uplot";
 import { useStore } from "../../lib/store";
 import { lttb } from "../../lib/downsample";
-import { UPlotChart } from "../UPlotChart";
+import { UPlotChart, type UPlotChartHandle } from "../UPlotChart";
 import type { ParsedStrategy } from "../../types";
 
 export function PositionChartPanel() {
@@ -11,13 +10,15 @@ export function PositionChartPanel() {
   const refId = useStore((s) => s.referenceId);
   const comparing = useStore((s) => s.comparingIds);
   const selectedProduct = useStore((s) => s.selectedProduct);
+  const tickIdx = useStore((s) => s.tickIdx);
   const sampled = useStore((s) => s.prefs.showSampled);
-  const plotRef = useRef<uPlot | null>(null);
+  const handleRef = useRef<UPlotChartHandle>(null);
 
   const ref = strategies.find((s) => s.id === refId) ?? null;
   const product = selectedProduct ?? ref?.products[0] ?? null;
-  const limit: number =
-    ref && product ? ref.positionLimits[product] ?? 50 : 50;
+  const limit: number = ref && product ? ref.positionLimits[product] ?? 50 : 50;
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
 
   const { data, options } = useMemo(() => {
     if (!ref || !product) {
@@ -61,7 +62,7 @@ export function PositionChartPanel() {
     const opts: Options = {
       width: 400,
       height: 200,
-      legend: { show: true },
+      legend: { show: true, live: true },
       cursor: { focus: { prox: 16 }, sync: { key: "prosperity" } },
       scales: { x: { time: false }, y: { auto: true } },
       series: [
@@ -77,10 +78,10 @@ export function PositionChartPanel() {
       hooks: {
         draw: [
           (u) => {
-            // shade the position-limit band
             const ctx = u.ctx;
-            const top = u.valToPos(limit, "y", true);
-            const bot = u.valToPos(-limit, "y", true);
+            const lim = limitRef.current;
+            const top = u.valToPos(lim, "y", true);
+            const bot = u.valToPos(-lim, "y", true);
             const left = u.bbox.left;
             const right = u.bbox.left + u.bbox.width;
             ctx.save();
@@ -98,7 +99,17 @@ export function PositionChartPanel() {
       },
     };
     return { data, options: opts };
-  }, [ref, product, strategies, comparing, sampled, limit]);
+  }, [ref, product, strategies, comparing, sampled]);
+
+  useEffect(() => {
+    if (!ref) return;
+    handleRef.current?.syncCursorToX(ref.timestamps[tickIdx] ?? 0);
+  }, [tickIdx, ref]);
+
+  // Redraw when the user changes the limit (band is drawn from limitRef).
+  useEffect(() => {
+    handleRef.current?.getPlot()?.redraw();
+  }, [limit]);
 
   const setLimit = useStore((s) => s.setPositionLimit);
 
@@ -121,7 +132,7 @@ export function PositionChartPanel() {
         )}
       </div>
       <div className="flex-1">
-        <UPlotChart data={data} options={options} onChartReady={(u) => (plotRef.current = u)} />
+        <UPlotChart ref={handleRef} data={data} options={options} />
       </div>
     </div>
   );
