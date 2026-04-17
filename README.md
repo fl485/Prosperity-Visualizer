@@ -43,6 +43,25 @@ npm run dev     # http://localhost:5173
 Then drop any `.log` file from IMC's submission dashboard (or from
 `prosperity3bt`) into the left rail.
 
+## Deploy to GitHub Pages
+
+This repo ships with a ready-to-go Pages workflow at
+`.github/workflows/deploy.yml`. Asset paths are **relative** (`base: "./"` in
+`vite.config.ts`), so the same build works at any repo path
+(`/YourFork/`, `/prosperity-visualizer/`, or a custom domain root) without a
+rebuild.
+
+To turn it on for a fork:
+
+1. Push to `main` (or run the workflow manually: Actions → _Deploy to GitHub
+   Pages_ → _Run workflow_).
+2. In the repo: **Settings → Pages → Build and deployment → Source: GitHub
+   Actions**.
+3. First successful run reports the live URL on the workflow summary page.
+
+If you want a custom base path (e.g. deploying to a subdirectory of another
+site), set `VITE_BASE=/your/path/` in the workflow's build step.
+
 ## Features
 
 - Drop 1–N log files; each gets a color and appears in all comparison charts.

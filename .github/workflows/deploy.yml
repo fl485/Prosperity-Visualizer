@@ -26,9 +26,11 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Relative base ("./") is set in vite.config.ts so the same build
+      # artifact works whether GitHub Pages serves at a project path
+      # (/Repo-Name/) or a custom domain root.
       - run: npm run build
-        env:
-          VITE_BASE: /prosperity-visualizer/
+      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

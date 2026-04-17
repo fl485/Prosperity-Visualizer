@@ -2,9 +2,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Hosted under https://<user>.github.io/prosperity-visualizer/
-// override via VITE_BASE for custom deploys
-const base = process.env.VITE_BASE ?? "/prosperity-visualizer/";
+// Default to relative asset paths so the built bundle works under any
+// GitHub Pages repo path ("/Prosperity-Visualizer/", "/my-fork/", etc.)
+// without a rebuild. Override with VITE_BASE=/custom/ for absolute roots.
+const base = process.env.VITE_BASE ?? "./";
 
 export default defineConfig({
   base,
