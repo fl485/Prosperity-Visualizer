@@ -1,4 +1,10 @@
-import { subscribe, getState, getReference, setPrefs } from "../store.js";
+import {
+  subscribe,
+  getState,
+  getReference,
+  setPrefs,
+  setTickIdx,
+} from "../store.js";
 import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
 import { downloadCanvasPng } from "../exporters.js";
@@ -8,19 +14,16 @@ const TARGET_POINTS = 1500;
 export function mountPnlChart({
   canvasEl,
   emptyEl,
+  legendEl,
   normCheck,
   diffCheck,
   sampledCheck,
   exportBtn,
+  resetZoomBtn,
 }) {
   let chart = null;
-  let legendEl = null;
   let lastKey = null;
-
-  const parent = canvasEl.parentElement;
-  legendEl = document.createElement("div");
-  legendEl.className = "chart-legend hidden";
-  parent.appendChild(legendEl);
+  let currentSeriesForLegend = [];
 
   normCheck.addEventListener("change", () =>
     setPrefs({ normalizedX: normCheck.checked })
@@ -34,6 +37,63 @@ export function mountPnlChart({
   exportBtn.addEventListener("click", () => {
     downloadCanvasPng(canvasEl, "pnl-performance.png");
   });
+  resetZoomBtn.addEventListener("click", () => chart?.resetXView());
+
+  function ensureChart() {
+    if (chart) return;
+    chart = createChart(canvasEl, {
+      onSeek: (xValue) => {
+        const state = getState();
+        const ref = getReference(state);
+        if (!ref) return;
+        const len = ref.timestamps.length;
+        if (len < 2) return;
+        if (state.prefs.normalizedX) {
+          setTickIdx(Math.round(xValue * (len - 1)));
+        } else {
+          // nearest tickKey
+          let lo = 0;
+          let hi = len - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (ref.timestamps[mid] < xValue) lo = mid + 1;
+            else hi = mid;
+          }
+          setTickIdx(lo);
+        }
+      },
+      onHover: (values, cursor) => {
+        renderLegend(values, cursor);
+      },
+    });
+  }
+
+  function renderLegend(values, cursor) {
+    if (!currentSeriesForLegend.length) {
+      legendEl.innerHTML = "";
+      return;
+    }
+    legendEl.innerHTML = currentSeriesForLegend
+      .map((s, i) => {
+        const v = values ? values[i] : null;
+        const cls =
+          v === null ? "muted" : v >= 0 ? "positive" : "negative";
+        const text =
+          v === null
+            ? "—"
+            : (v >= 0 ? "+" : "") +
+              (Math.abs(v) >= 1000
+                ? (v / 1000).toFixed(1) + "k"
+                : v.toFixed(0));
+        return `<span class="legend-row">
+          <span class="legend-swatch" style="background:${s.color}"></span>
+          <span class="legend-name">${escapeHtml(s.name)}</span>
+          <span class="legend-value ${cls}">${text}</span>
+        </span>`;
+      })
+      .join("");
+    void cursor;
+  }
 
   function computeModel(state) {
     const ref = getReference(state);
@@ -56,10 +116,9 @@ export function mountPnlChart({
         const out = new Array(xsBase.length);
         if (prefs.normalizedX) {
           for (let i = 0; i < xsBase.length; i++) {
-            const t = xsBase[i];
             const refIdx = Math.min(
               refXs.length - 1,
-              Math.round(t * (refXs.length - 1))
+              Math.round(xsBase[i] * (refXs.length - 1))
             );
             out[i] = ys[i] - refYs[refIdx];
           }
@@ -76,54 +135,21 @@ export function mountPnlChart({
     }
 
     const series = [
-      {
-        name: ref.name + " (ref)",
-        color: ref.color,
-        width: 2.2,
-        ...project(ref),
-      },
+      { name: ref.name + " (ref)", color: ref.color, width: 2.2, ...project(ref) },
     ];
     for (const s of compareList) {
       series.push({ name: s.name, color: s.color, width: 1.2, ...project(s) });
     }
+    currentSeriesForLegend = series.map((s) => ({ name: s.name, color: s.color }));
 
     return {
       xFormat: (v) =>
         prefs.normalizedX
-          ? (v * 100).toFixed(0) + "%"
+          ? (v * 100).toFixed(1) + "%"
           : Math.round(v).toLocaleString(),
       yFormat: (v) =>
         Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(0),
       series,
-      onRender: (values) => {
-        if (!series.length) {
-          legendEl.classList.add("hidden");
-          return;
-        }
-        legendEl.classList.remove("hidden");
-        legendEl.innerHTML = series
-          .map((s, i) => {
-            const v = values[i];
-            const cls =
-              v === null
-                ? ""
-                : v >= 0
-                ? "positive"
-                : "negative";
-            const text =
-              v === null
-                ? "—"
-                : (v >= 0 ? "+" : "") +
-                  (Math.abs(v) >= 1000
-                    ? (v / 1000).toFixed(1) + "k"
-                    : v.toFixed(0));
-            return `<div class="legend-row">
-              <span class="legend-name"><span class="legend-swatch" style="background:${s.color}"></span>${escapeHtml(s.name)}</span>
-              <span class="legend-value ${cls}">${text}</span>
-            </div>`;
-          })
-          .join("");
-      },
     };
   }
 
@@ -140,16 +166,16 @@ export function mountPnlChart({
         chart.destroy();
         chart = null;
       }
+      currentSeriesForLegend = [];
+      legendEl.innerHTML = "";
       emptyEl.classList.remove("hidden");
       canvasEl.classList.add("hidden");
-      legendEl.classList.add("hidden");
       return;
     }
     emptyEl.classList.add("hidden");
     canvasEl.classList.remove("hidden");
-    if (!chart) chart = createChart(canvasEl);
+    ensureChart();
 
-    // Rebuild model only when deps change
     const key =
       state.strategies.length +
       "|" +
@@ -165,9 +191,9 @@ export function mountPnlChart({
     if (key !== lastKey) {
       chart.setData(computeModel(state));
       lastKey = key;
+      renderLegend(null, null);
     }
 
-    // Crosshair
     const cursorX = state.prefs.normalizedX
       ? ref.timestamps.length > 1
         ? state.tickIdx / (ref.timestamps.length - 1)

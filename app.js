@@ -113,10 +113,12 @@ async function main() {
   mountPnlChart({
     canvasEl: $("chart-pnl"),
     emptyEl: $("chart-pnl-empty"),
+    legendEl: $("pnl-legend"),
     normCheck: $("pnl-norm"),
     diffCheck: $("pnl-diff"),
     sampledCheck: $("pnl-sampled"),
     exportBtn: $("pnl-export"),
+    resetZoomBtn: $("pnl-reset-zoom"),
   });
 
   mountSummary({
@@ -128,6 +130,12 @@ async function main() {
     canvasEl: $("chart-price"),
     emptyEl: $("chart-price-empty"),
     titleEl: $("price-title"),
+    legendEl: $("price-legend"),
+    levelsCheck: $("price-levels"),
+    buysCheck: $("price-buys"),
+    sellsCheck: $("price-sells"),
+    botsCheck: $("price-bots"),
+    resetZoomBtn: $("price-reset-zoom"),
   });
 
   mountOrderBook({
@@ -146,7 +154,9 @@ async function main() {
     canvasEl: $("chart-position"),
     emptyEl: $("chart-position-empty"),
     titleEl: $("position-title"),
+    legendEl: $("position-legend"),
     limitInput: $("position-limit"),
+    resetZoomBtn: $("position-reset-zoom"),
   });
 
   mountOwnFills({

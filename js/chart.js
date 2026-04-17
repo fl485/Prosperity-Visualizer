@@ -1,47 +1,49 @@
 /**
- * Vanilla Canvas line chart.
+ * Vanilla Canvas line chart with click-drag horizontal zoom, double-click
+ * seek, and an optional external legend hook.
  *
  * Usage:
- *   const chart = createChart(canvasElement);
+ *   const chart = createChart(canvas, {
+ *     onSeek: (xValue) => {...},
+ *     onHover: (values, xValue) => {...},   // also fires on chart-internal
+ *                                            // re-renders (e.g. after zoom)
+ *   });
  *   chart.setData({
- *     xLabel: "Timestamp",
- *     yLabel: "",
- *     xFormat: (v) => v.toString(),
- *     yFormat: (v) => v.toFixed(1),
- *     series: [
- *       { name, color, xs, ys, width, dash }
- *     ],
- *     limitLines: [{ value: 50, color: "#f00", dash: [3,3] }],
+ *     xFormat, yFormat,
+ *     series: [{ name, color, xs, ys, width?, dash? }],
+ *     limitLines: [{ value, color, dash? }],
  *   });
  *   chart.setCursorX(x);   // programmatic crosshair
- *
- * Coordinates match uPlot's data[0]=xs, data[1..]=ys model.
+ *   chart.setXView(min, max);    // zoom to a range
+ *   chart.resetXView();          // back to full
  */
 
 const DPR = window.devicePixelRatio || 1;
+const DRAG_THRESHOLD = 4; // px before a drag is treated as a zoom
 
-export function createChart(canvas) {
+export function createChart(canvas, opts = {}) {
   const ctx = canvas.getContext("2d");
+  const { onSeek = null, onHover = null } = opts;
 
-  /** @type {{
-   *   xLabel: string, yLabel: string,
-   *   xFormat: (v:number)=>string, yFormat: (v:number)=>string,
-   *   series: Array<{name:string,color:string,xs:number[],ys:(number|null)[],width?:number,dash?:number[]}>,
-   *   limitLines?: Array<{value:number,color:string,dash?:number[]}>,
-   * }} */
   let model = null;
   let cursorX = null;
-  let hoverLogicalX = null; // mouse-follow cursor in data coords
+  let hoverLogicalX = null;
   let lastSize = { w: 0, h: 0 };
   let resizeRaf = null;
 
-  // Current drawing rectangle in CSS pixels.
-  let plot = { left: 40, top: 8, width: 0, height: 0 };
+  let plot = { left: 48, top: 8, width: 0, height: 0 };
+  let xView = null; // [min, max] or null for auto-range
+
   const AXIS_COLOR = "#71717a";
   const GRID_COLOR = "#27272a";
   const MUTED_TEXT = "#a1a1aa";
+  const ZOOM_BG = "rgba(45, 212, 191, 0.15)";
+  const ZOOM_EDGE = "rgba(45, 212, 191, 0.6)";
 
-  // Observe container size
+  // --- drag zoom state ---
+  let dragStart = null; // { pxStart, pxCur, started }
+  let dragClickTime = 0;
+
   const ro = new ResizeObserver(() => {
     if (resizeRaf != null) return;
     resizeRaf = requestAnimationFrame(() => {
@@ -50,6 +52,77 @@ export function createChart(canvas) {
     });
   });
   ro.observe(canvas);
+
+  canvas.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    if (px < plot.left || px > plot.left + plot.width) return;
+    dragStart = { pxStart: px, pxCur: px, started: false };
+    dragClickTime = performance.now();
+    e.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!dragStart) return;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    dragStart.pxCur = px;
+    if (
+      !dragStart.started &&
+      Math.abs(px - dragStart.pxStart) >= DRAG_THRESHOLD
+    ) {
+      dragStart.started = true;
+    }
+    if (dragStart.started) render();
+  });
+
+  window.addEventListener("mouseup", (e) => {
+    if (!dragStart) return;
+    const drag = dragStart;
+    dragStart = null;
+    if (!drag.started) {
+      render();
+      return;
+    }
+    if (!model) {
+      render();
+      return;
+    }
+    const xmin = visibleXMin();
+    const xmax = visibleXMax();
+    const p2v = (px) =>
+      xmin + ((px - plot.left) / plot.width) * (xmax - xmin);
+    let a = p2v(Math.max(plot.left, Math.min(plot.left + plot.width, drag.pxStart)));
+    let b = p2v(Math.max(plot.left, Math.min(plot.left + plot.width, drag.pxCur)));
+    if (a > b) [a, b] = [b, a];
+    if (b - a > (xmax - xmin) * 0.001) {
+      xView = [a, b];
+      render();
+    } else {
+      render();
+    }
+  });
+
+  canvas.addEventListener("dblclick", (e) => {
+    if (!model || !onSeek) return;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    if (px < plot.left || px > plot.left + plot.width) return;
+    const xmin = visibleXMin();
+    const xmax = visibleXMax();
+    const xValue = xmin + ((px - plot.left) / plot.width) * (xmax - xmin);
+    onSeek(xValue);
+  });
+
+  // Right-click to reset zoom.
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (xView !== null) {
+      xView = null;
+      render();
+    }
+  });
 
   canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
@@ -62,15 +135,18 @@ export function createChart(canvas) {
       return;
     }
     if (!model || !model.series.length) return;
-    const xmin = model._xmin;
-    const xmax = model._xmax;
+    const xmin = visibleXMin();
+    const xmax = visibleXMax();
     hoverLogicalX = xmin + ((px - plot.left) / plot.width) * (xmax - xmin);
     render();
   });
+
   canvas.addEventListener("mouseleave", () => {
     hoverLogicalX = null;
     render();
   });
+
+  canvas.style.cursor = "crosshair";
 
   function sizeCanvas() {
     const rect = canvas.getBoundingClientRect();
@@ -84,10 +160,37 @@ export function createChart(canvas) {
     return { w, h };
   }
 
+  function visibleXMin() {
+    return xView ? xView[0] : model._xmin;
+  }
+  function visibleXMax() {
+    return xView ? xView[1] : model._xmax;
+  }
+
   function computeBounds() {
     let xmin = Infinity,
-      xmax = -Infinity,
-      ymin = Infinity,
+      xmax = -Infinity;
+    for (const s of model.series) {
+      for (let i = 0; i < s.xs.length; i++) {
+        const x = s.xs[i];
+        if (Number.isFinite(x)) {
+          if (x < xmin) xmin = x;
+          if (x > xmax) xmax = x;
+        }
+      }
+    }
+    if (!Number.isFinite(xmin)) {
+      xmin = 0;
+      xmax = 1;
+    }
+    if (xmin === xmax) xmax = xmin + 1;
+    model._xmin = xmin;
+    model._xmax = xmax;
+
+    // y bounds only over currently visible x range
+    const visXmin = visibleXMin();
+    const visXmax = visibleXMax();
+    let ymin = Infinity,
       ymax = -Infinity;
     for (const s of model.series) {
       const xs = s.xs;
@@ -95,11 +198,8 @@ export function createChart(canvas) {
       const len = Math.min(xs.length, ys.length);
       for (let i = 0; i < len; i++) {
         const x = xs[i];
+        if (x < visXmin || x > visXmax) continue;
         const y = ys[i];
-        if (Number.isFinite(x)) {
-          if (x < xmin) xmin = x;
-          if (x > xmax) xmax = x;
-        }
         if (Number.isFinite(y)) {
           if (y < ymin) ymin = y;
           if (y > ymax) ymax = y;
@@ -114,12 +214,7 @@ export function createChart(canvas) {
         }
       }
     }
-    if (!Number.isFinite(xmin) || !Number.isFinite(xmax)) {
-      xmin = 0;
-      xmax = 1;
-    }
-    if (xmin === xmax) xmax = xmin + 1;
-    if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) {
+    if (!Number.isFinite(ymin)) {
       ymin = 0;
       ymax = 1;
     }
@@ -132,8 +227,6 @@ export function createChart(canvas) {
       ymin -= pad;
       ymax += pad;
     }
-    model._xmin = xmin;
-    model._xmax = xmax;
     model._ymin = ymin;
     model._ymax = ymax;
   }
@@ -166,14 +259,15 @@ export function createChart(canvas) {
     ctx.scale(DPR, DPR);
     ctx.clearRect(0, 0, w, h);
 
-    // Layout
     plot = { left: 48, top: 8, width: w - 54, height: h - 28 };
     if (plot.width < 20 || plot.height < 20) {
       ctx.restore();
       return;
     }
 
-    const { _xmin: xmin, _xmax: xmax, _ymin: ymin, _ymax: ymax } = model;
+    const xmin = visibleXMin();
+    const xmax = visibleXMax();
+    const { _ymin: ymin, _ymax: ymax } = model;
     const px = (x) => plot.left + ((x - xmin) / (xmax - xmin)) * plot.width;
     const py = (y) =>
       plot.top + plot.height - ((y - ymin) / (ymax - ymin)) * plot.height;
@@ -198,8 +292,7 @@ export function createChart(canvas) {
 
     ctx.textAlign = "right";
     for (let v = yStart; v <= ymax; v += yStep) {
-      const y = py(v);
-      ctx.fillText(model.yFormat(v), plot.left - 6, y);
+      ctx.fillText(model.yFormat(v), plot.left - 6, py(v));
     }
 
     const xStep = niceStep(xmax - xmin, 6);
@@ -215,8 +308,7 @@ export function createChart(canvas) {
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     for (let v = xStart; v <= xmax; v += xStep) {
-      const x = px(v);
-      ctx.fillText(model.xFormat(v), x, plot.top + plot.height + 4);
+      ctx.fillText(model.xFormat(v), px(v), plot.top + plot.height + 4);
     }
 
     // Limit lines
@@ -237,7 +329,7 @@ export function createChart(canvas) {
       ctx.restore();
     }
 
-    // Series
+    // Series (clipped)
     ctx.save();
     ctx.beginPath();
     ctx.rect(plot.left, plot.top, plot.width, plot.height);
@@ -269,9 +361,55 @@ export function createChart(canvas) {
       ctx.stroke();
       ctx.setLineDash([]);
     }
+
+    // Markers (scatter points drawn over the line series)
+    if (model.markers) {
+      for (const m of model.markers) {
+        ctx.fillStyle = m.color;
+        ctx.strokeStyle = m.color;
+        const size = m.size ?? 5;
+        const half = size / 2;
+        const xs = m.xs;
+        const ys = m.ys;
+        const len = Math.min(xs.length, ys.length);
+        for (let i = 0; i < len; i++) {
+          const y = ys[i];
+          const x = xs[i];
+          if (!Number.isFinite(y) || !Number.isFinite(x)) continue;
+          if (x < xmin || x > xmax) continue;
+          const X = px(x);
+          const Y = py(y);
+          drawMarker(ctx, X, Y, m.shape ?? "dot", size, half);
+        }
+      }
+    }
     ctx.restore();
 
-    // Crosshair (programmatic or hover)
+    // Active drag-zoom rectangle
+    if (dragStart && dragStart.started) {
+      const a = Math.max(
+        plot.left,
+        Math.min(plot.left + plot.width, dragStart.pxStart)
+      );
+      const b = Math.max(
+        plot.left,
+        Math.min(plot.left + plot.width, dragStart.pxCur)
+      );
+      const left = Math.min(a, b);
+      const width = Math.abs(b - a);
+      ctx.fillStyle = ZOOM_BG;
+      ctx.fillRect(left, plot.top, width, plot.height);
+      ctx.strokeStyle = ZOOM_EDGE;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(left + 0.5, plot.top);
+      ctx.lineTo(left + 0.5, plot.top + plot.height);
+      ctx.moveTo(left + width - 0.5, plot.top);
+      ctx.lineTo(left + width - 0.5, plot.top + plot.height);
+      ctx.stroke();
+    }
+
+    // Crosshair
     const chosen = hoverLogicalX ?? cursorX;
     if (chosen !== null && chosen >= xmin && chosen <= xmax) {
       ctx.save();
@@ -285,39 +423,47 @@ export function createChart(canvas) {
       ctx.stroke();
       ctx.restore();
 
-      // Readouts under crosshair
-      const labelX = px(chosen);
+      // Readout under crosshair
       ctx.save();
       ctx.font =
         "10px JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillStyle = MUTED_TEXT;
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
       const tsLabel = model.xFormat(chosen);
-      // draw a small background for readability
       const m = ctx.measureText(tsLabel);
-      const pad = 3;
-      const bgW = m.width + pad * 2;
+      const bgW = m.width + 6;
+      const labelX = px(chosen);
       const bgX = Math.min(
         Math.max(labelX - bgW / 2, plot.left),
         plot.left + plot.width - bgW
       );
-      ctx.fillStyle = "rgba(9,9,11,0.75)";
+      ctx.fillStyle = "rgba(9,9,11,0.82)";
       ctx.fillRect(bgX, plot.top + plot.height - 14, bgW, 12);
       ctx.fillStyle = MUTED_TEXT;
       ctx.fillText(tsLabel, bgX + bgW / 2, plot.top + plot.height - 2);
       ctx.restore();
     }
 
+    // Zoom indicator in the top-left of the plot area
+    if (xView) {
+      ctx.save();
+      ctx.font =
+        "9px JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = ZOOM_EDGE;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("zoom · right-click to reset", plot.left + 4, plot.top + 2);
+      ctx.restore();
+    }
+
     ctx.restore();
 
-    // Update legend via callback if provided
-    if (model.onRender) {
-      const values = model.series.map((s) => {
-        if (chosen === null) return null;
-        return sampleSeries(s, chosen);
-      });
-      model.onRender(values, chosen);
+    if (onHover || model.onRender) {
+      const values = model.series.map((s) =>
+        chosen === null ? null : sampleSeries(s, chosen)
+      );
+      if (onHover) onHover(values, chosen);
+      if (model.onRender) model.onRender(values, chosen);
     }
   }
 
@@ -345,10 +491,53 @@ export function createChart(canvas) {
     render();
   }
 
+  function setXView(min, max) {
+    xView = [min, max];
+    render();
+  }
+
+  function resetXView() {
+    xView = null;
+    render();
+  }
+
   function destroy() {
     ro.disconnect();
     if (resizeRaf != null) cancelAnimationFrame(resizeRaf);
   }
 
-  return { setData, setCursorX, render, destroy };
+  return { setData, setCursorX, setXView, resetXView, render, destroy };
 }
+
+function drawMarker(ctx, X, Y, shape, size, half) {
+  if (shape === "up") {
+    ctx.beginPath();
+    ctx.moveTo(X, Y - half);
+    ctx.lineTo(X + half, Y + half);
+    ctx.lineTo(X - half, Y + half);
+    ctx.closePath();
+    ctx.fill();
+  } else if (shape === "down") {
+    ctx.beginPath();
+    ctx.moveTo(X, Y + half);
+    ctx.lineTo(X + half, Y - half);
+    ctx.lineTo(X - half, Y - half);
+    ctx.closePath();
+    ctx.fill();
+  } else if (shape === "diamond") {
+    ctx.beginPath();
+    ctx.moveTo(X, Y - half);
+    ctx.lineTo(X + half, Y);
+    ctx.lineTo(X, Y + half);
+    ctx.lineTo(X - half, Y);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    // dot (default)
+    ctx.beginPath();
+    ctx.arc(X, Y, half, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  void size;
+}
+

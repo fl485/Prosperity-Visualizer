@@ -3,6 +3,7 @@ import {
   getState,
   getReference,
   setPositionLimit,
+  setTickIdx,
 } from "../store.js";
 import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
@@ -11,16 +12,13 @@ export function mountPositionChart({
   canvasEl,
   emptyEl,
   titleEl,
+  legendEl,
   limitInput,
+  resetZoomBtn,
 }) {
   let chart = null;
-  let legendEl = null;
   let lastKey = null;
-
-  const parent = canvasEl.parentElement;
-  legendEl = document.createElement("div");
-  legendEl.className = "chart-legend hidden";
-  parent.appendChild(legendEl);
+  let currentLegend = [];
 
   limitInput.addEventListener("change", (e) => {
     const state = getState();
@@ -30,6 +28,49 @@ export function mountPositionChart({
     const v = Math.max(1, Number(e.target.value) || 1);
     setPositionLimit(ref.id, product, v);
   });
+  resetZoomBtn.addEventListener("click", () => chart?.resetXView());
+
+  function ensureChart() {
+    if (chart) return;
+    chart = createChart(canvasEl, {
+      onSeek: (xValue) => {
+        const state = getState();
+        const ref = getReference(state);
+        if (!ref) return;
+        const ts = ref.timestamps;
+        if (ts.length < 2) return;
+        let lo = 0;
+        let hi = ts.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (ts[mid] < xValue) lo = mid + 1;
+          else hi = mid;
+        }
+        setTickIdx(lo);
+      },
+      onHover: renderLegend,
+    });
+  }
+
+  function renderLegend(values) {
+    if (!currentLegend.length) {
+      legendEl.innerHTML = "";
+      return;
+    }
+    legendEl.innerHTML = currentLegend
+      .map((s, i) => {
+        const v = values ? values[i] : null;
+        const val =
+          v == null
+            ? `<span class="legend-value muted">—</span>`
+            : `<span class="legend-value">${v.toFixed(0)}</span>`;
+        return `<span class="legend-row">
+          <span class="legend-swatch" style="background:${s.color}"></span>
+          <span class="legend-name">${escapeHtml(s.name)}</span>${val}
+        </span>`;
+      })
+      .join("");
+  }
 
   function computeModel(state, ref, product, limit) {
     const { strategies, comparingIds } = state;
@@ -40,32 +81,28 @@ export function mountPositionChart({
       const ys = s.series[product].position;
       const target = state.prefs.showSampled ? 1200 : xs.length;
       const r = lttb(xs, ys, target);
-      series.push({ name: s.name, color: s.color, xs: r.xs, ys: r.ys, width: s.id === ref.id ? 2 : 1 });
+      series.push({
+        name: s.name,
+        color: s.color,
+        xs: r.xs,
+        ys: r.ys,
+        width: s.id === ref.id ? 2 : 1,
+      });
     }
     add(ref);
     for (const s of strategies) {
       if (s.id === ref.id || !comparingIds.has(s.id)) continue;
       add(s);
     }
+    currentLegend = series.map((s) => ({ name: s.name, color: s.color }));
     return {
       xFormat: (v) => Math.round(v).toLocaleString(),
       yFormat: (v) => v.toFixed(0),
       series,
       limitLines: [
-        { value: limit, color: "rgba(244,63,94,0.5)", dash: [3, 3] },
-        { value: -limit, color: "rgba(244,63,94,0.5)", dash: [3, 3] },
+        { value: limit, color: "rgba(244,63,94,0.6)", dash: [3, 3] },
+        { value: -limit, color: "rgba(244,63,94,0.6)", dash: [3, 3] },
       ],
-      onRender: (values) => {
-        legendEl.classList.remove("hidden");
-        legendEl.innerHTML = series
-          .map(
-            (s, i) => `<div class="legend-row">
-          <span class="legend-name"><span class="legend-swatch" style="background:${s.color}"></span>${escapeHtml(s.name)}</span>
-          <span class="legend-value">${values[i] == null ? "—" : values[i].toFixed(0)}</span>
-        </div>`
-          )
-          .join("");
-      },
     };
   }
 
@@ -80,10 +117,11 @@ export function mountPositionChart({
         chart.destroy();
         chart = null;
       }
+      currentLegend = [];
+      legendEl.innerHTML = "";
       emptyEl.textContent = ref ? "Select a product." : "Load a log to see positions.";
       emptyEl.classList.remove("hidden");
       canvasEl.classList.add("hidden");
-      legendEl.classList.add("hidden");
       limitInput.disabled = true;
       return;
     }
@@ -94,12 +132,20 @@ export function mountPositionChart({
     const limit = ref.positionLimits[product] ?? 50;
     if (document.activeElement !== limitInput) limitInput.value = String(limit);
 
-    if (!chart) chart = createChart(canvasEl);
+    ensureChart();
 
-    const key = `${ref.id}|${product}|${state.prefs.showSampled}|${Array.from(state.comparingIds).join(",")}|${state.strategies.length}|${limit}`;
+    const key = [
+      ref.id,
+      product,
+      state.prefs.showSampled,
+      Array.from(state.comparingIds).join(","),
+      state.strategies.length,
+      limit,
+    ].join("|");
     if (key !== lastKey) {
       chart.setData(computeModel(state, ref, product, limit));
       lastKey = key;
+      renderLegend(null);
     }
     chart.setCursorX(ref.timestamps[state.tickIdx] ?? 0);
   }

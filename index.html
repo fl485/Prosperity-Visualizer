@@ -111,9 +111,11 @@
                 <label class="check small"><input type="checkbox" id="pnl-norm" /> normalize x</label>
                 <label class="check small"><input type="checkbox" id="pnl-diff" /> diff vs ref</label>
                 <label class="check small"><input type="checkbox" id="pnl-sampled" checked /> sampled</label>
+                <button class="btn icon" id="pnl-reset-zoom" title="Reset zoom">⤾</button>
                 <button class="btn icon" id="pnl-export" title="Export PNG">⤓</button>
               </div>
             </header>
+            <div class="chart-legend" id="pnl-legend"></div>
             <div class="panel-body chart-body">
               <canvas class="chart" id="chart-pnl"></canvas>
               <div class="chart-empty" id="chart-pnl-empty">Load a log to see PnL.</div>
@@ -133,7 +135,15 @@
           <section class="panel panel-price" id="panel-price">
             <header class="panel-header">
               <span id="price-title">Price &amp; Liquidity</span>
+              <div class="panel-actions">
+                <label class="check small"><input type="checkbox" id="price-levels" checked /> L2/L3</label>
+                <label class="check small"><input type="checkbox" id="price-buys" /> own buys</label>
+                <label class="check small"><input type="checkbox" id="price-sells" /> own sells</label>
+                <label class="check small"><input type="checkbox" id="price-bots" /> bot trades</label>
+                <button class="btn icon" id="price-reset-zoom" title="Reset zoom">⤾</button>
+              </div>
             </header>
+            <div class="chart-legend" id="price-legend"></div>
             <div class="panel-body chart-body">
               <canvas class="chart" id="chart-price"></canvas>
               <div class="chart-empty" id="chart-price-empty">Load a log to see prices.</div>
@@ -159,8 +169,12 @@
           <section class="panel panel-position" id="panel-position">
             <header class="panel-header">
               <span id="position-title">Position</span>
-              <label class="check small position-limit-wrap">limit ±<input type="number" id="position-limit" min="1" max="9999" class="input tiny-num" /></label>
+              <div class="panel-actions">
+                <label class="check small position-limit-wrap">limit ±<input type="number" id="position-limit" min="1" max="9999" class="input tiny-num" /></label>
+                <button class="btn icon" id="position-reset-zoom" title="Reset zoom">⤾</button>
+              </div>
             </header>
+            <div class="chart-legend" id="position-legend"></div>
             <div class="panel-body chart-body">
               <canvas class="chart" id="chart-position"></canvas>
               <div class="chart-empty" id="chart-position-empty">Load a log to see positions.</div>

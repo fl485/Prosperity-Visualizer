@@ -31,7 +31,7 @@ const KNOWN_LIMITS = {
 };
 
 export function defaultLimit(product) {
-  return KNOWN_LIMITS[product] ?? 50;
+  return KNOWN_LIMITS[product] ?? 80;
 }
 
 export function buildLimits(products) {

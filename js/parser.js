@@ -73,6 +73,20 @@ function microPriceOf(bids, asks) {
   return (bb.price * ba.volume + ba.price * bb.volume) / denom;
 }
 
+/**
+ * Wall mid: midpoint between the largest-volume visible level on each
+ * side — the "walls" the market is leaning against. Falls back to NaN
+ * if either side is empty.
+ */
+function wallMidOf(bids, asks) {
+  if (!bids.length || !asks.length) return NaN;
+  let bWall = bids[0];
+  for (const l of bids) if (l.volume > bWall.volume) bWall = l;
+  let aWall = asks[0];
+  for (const l of asks) if (l.volume > aWall.volume) aWall = l;
+  return (bWall.price + aWall.price) / 2;
+}
+
 function totalVol(levels) {
   let s = 0;
   for (const l of levels) s += l.volume;
@@ -122,7 +136,18 @@ export function buildStrategy(rawFile, rows, meta) {
       timestamps,
       midPrice: new Array(timestamps.length).fill(NaN),
       microPrice: new Array(timestamps.length).fill(NaN),
+      wallMid: new Array(timestamps.length).fill(NaN),
       spread: new Array(timestamps.length).fill(NaN),
+      bidPrices: [
+        new Array(timestamps.length).fill(NaN),
+        new Array(timestamps.length).fill(NaN),
+        new Array(timestamps.length).fill(NaN),
+      ],
+      askPrices: [
+        new Array(timestamps.length).fill(NaN),
+        new Array(timestamps.length).fill(NaN),
+        new Array(timestamps.length).fill(NaN),
+      ],
       bestBid: new Array(timestamps.length).fill(NaN),
       bestAsk: new Array(timestamps.length).fill(NaN),
       bidVol: new Array(timestamps.length).fill(NaN),
@@ -143,28 +168,29 @@ export function buildStrategy(rawFile, rows, meta) {
     if (i === undefined) continue;
     s.bestBid[i] = r.bids[0]?.price ?? NaN;
     s.bestAsk[i] = r.asks[0]?.price ?? NaN;
+    for (let lvl = 0; lvl < 3; lvl++) {
+      s.bidPrices[lvl][i] = r.bids[lvl]?.price ?? NaN;
+      s.askPrices[lvl][i] = r.asks[lvl]?.price ?? NaN;
+    }
     s.bidVol[i] = totalVol(r.bids);
     s.askVol[i] = totalVol(r.asks);
     const totalBA = (s.bidVol[i] || 0) + (s.askVol[i] || 0);
     s.imbalance[i] = totalBA > 0 ? (s.bidVol[i] || 0) / totalBA : NaN;
-    s.midPrice[i] = r.midPrice && r.midPrice !== 0 ? r.midPrice : NaN;
+    // Mid is only meaningful with both sides present; IMC's CSV mid is
+    // 0 when one side is empty, so we collapse those to NaN and do not
+    // forward-fill (leaves a visible gap in the chart).
+    s.midPrice[i] =
+      r.bids.length > 0 && r.asks.length > 0 && Number.isFinite(r.midPrice) && r.midPrice !== 0
+        ? r.midPrice
+        : NaN;
     s.microPrice[i] = microPriceOf(r.bids, r.asks);
+    s.wallMid[i] = wallMidOf(r.bids, r.asks);
     s.spread[i] =
       Number.isFinite(s.bestBid[i]) && Number.isFinite(s.bestAsk[i])
         ? s.bestAsk[i] - s.bestBid[i]
         : NaN;
     s.pnl[i] = r.pnl;
     s.books[i] = { bids: r.bids, asks: r.asks };
-  }
-
-  // Forward-fill mid price within each product.
-  for (const p of products) {
-    const s = series[p];
-    let last = NaN;
-    for (let i = 0; i < s.midPrice.length; i++) {
-      if (Number.isFinite(s.midPrice[i])) last = s.midPrice[i];
-      else if (Number.isFinite(last)) s.midPrice[i] = last;
-    }
   }
 
   // Day inference for trades: walk in file order, bump to next available
