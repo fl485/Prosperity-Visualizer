@@ -169,6 +169,7 @@ async function main() {
     bodyEl: $("fills-body"),
     titleEl: $("fills-title"),
     showAllInput: $("fills-all"),
+    currentOnlyInput: $("fills-current"),
   });
 
   mountLogs({

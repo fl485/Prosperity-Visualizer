@@ -3,18 +3,28 @@ import {
   getState,
   getReference,
   setFillsShowAll,
+  setFillsCurrentOnly,
 } from "../store.js";
 
-export function mountOwnFills({ bodyEl, titleEl, showAllInput }) {
+export function mountOwnFills({ bodyEl, titleEl, showAllInput, currentOnlyInput }) {
   showAllInput.addEventListener("change", (e) =>
     setFillsShowAll(e.target.checked)
+  );
+  currentOnlyInput.addEventListener("change", (e) =>
+    setFillsCurrentOnly(e.target.checked)
   );
 
   function render() {
     const state = getState();
     const ref = getReference(state);
     showAllInput.checked = state.fillsShowAll;
-    titleEl.textContent = `Own Fills ${state.fillsShowAll ? "· all" : "· ±500 ts"}`;
+    currentOnlyInput.checked = state.fillsCurrentOnly;
+    const scopeLabel = state.fillsCurrentOnly
+      ? "· current"
+      : state.fillsShowAll
+        ? "· all"
+        : "· ±500 ts";
+    titleEl.textContent = `Own Fills ${scopeLabel}`;
 
     if (!ref) {
       bodyEl.innerHTML = `<div class="muted" style="padding:12px;text-align:center">No strategy loaded.</div>`;
@@ -25,7 +35,9 @@ export function mountOwnFills({ bodyEl, titleEl, showAllInput }) {
     let fills = ref.ownFills;
     if (state.selectedProduct)
       fills = fills.filter((f) => f.product === state.selectedProduct);
-    if (!state.fillsShowAll) {
+    if (state.fillsCurrentOnly) {
+      fills = fills.filter((f) => f.timestamp === rawTs);
+    } else if (!state.fillsShowAll) {
       const lo = rawTs - 500;
       const hi = rawTs + 500;
       fills = fills.filter((f) => f.timestamp >= lo && f.timestamp <= hi);

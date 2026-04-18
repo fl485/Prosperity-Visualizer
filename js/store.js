@@ -44,6 +44,7 @@ let state = {
   railCollapsed: false,
   logTab: "lambda",
   fillsShowAll: false,
+  fillsCurrentOnly: true,
 };
 
 const listeners = new Set();
@@ -153,7 +154,10 @@ export function setLogTab(t) {
   setState({ logTab: t });
 }
 export function setFillsShowAll(b) {
-  setState({ fillsShowAll: b });
+  setState({ fillsShowAll: b, fillsCurrentOnly: b ? false : state.fillsCurrentOnly });
+}
+export function setFillsCurrentOnly(b) {
+  setState({ fillsCurrentOnly: b, fillsShowAll: b ? false : state.fillsShowAll });
 }
 export function setRailCollapsed(b) {
   setState({ railCollapsed: b });
