@@ -139,6 +139,8 @@ async function main() {
     buysCheck: $("price-buys"),
     sellsCheck: $("price-sells"),
     botsCheck: $("price-bots"),
+    overlayCheck: $("price-overlay"),
+    joinGapsCheck: $("price-join-gaps"),
     resetZoomBtn: $("price-reset-zoom"),
   });
 

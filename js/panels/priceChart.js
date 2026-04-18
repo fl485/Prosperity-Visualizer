@@ -9,7 +9,15 @@ import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
 
 // Default toggle state lives in prefs so the user's choice persists.
-// Keys: priceLevels (L2/L3), priceBuys, priceSells, priceBots.
+// Keys: priceLevels (L2/L3), priceBuys, priceSells, priceBots, priceOverlayDays.
+//
+// Products whose fair value drifts by a known amount per day. In overlay
+// mode we subtract `day * offset` from prices so the days line up on a
+// common y-axis instead of stepping up the chart.
+const DAY_OFFSET_PER_DAY = {
+  INTARIAN_PEPPER_ROOT: 1000,
+};
+
 export function mountPriceChart({
   canvasEl,
   emptyEl,
@@ -22,6 +30,8 @@ export function mountPriceChart({
   buysCheck,
   sellsCheck,
   botsCheck,
+  overlayCheck,
+  joinGapsCheck,
   resetZoomBtn,
 }) {
   let chart = null;
@@ -49,6 +59,12 @@ export function mountPriceChart({
   botsCheck.addEventListener("change", () =>
     setPrefs({ priceBots: botsCheck.checked })
   );
+  overlayCheck.addEventListener("change", () =>
+    setPrefs({ priceOverlayDays: overlayCheck.checked })
+  );
+  joinGapsCheck.addEventListener("change", () =>
+    setPrefs({ priceJoinGaps: joinGapsCheck.checked })
+  );
   resetZoomBtn.addEventListener("click", () => chart?.resetXView());
 
   function ensureChart() {
@@ -58,6 +74,23 @@ export function mountPriceChart({
         const state = getState();
         const ref = getReference(state);
         if (!ref) return;
+        if (state.prefs.priceOverlayDays) {
+          // x here is a raw timestamp (0..~999900). Jump to the nearest
+          // tick within the currently-viewed day.
+          const curDay = ref.days[state.tickIdx] ?? ref.days[0] ?? 0;
+          let best = -1;
+          let bestDelta = Infinity;
+          for (let i = 0; i < ref.days.length; i++) {
+            if (ref.days[i] !== curDay) continue;
+            const d = Math.abs(ref.rawTimestamps[i] - xValue);
+            if (d < bestDelta) {
+              bestDelta = d;
+              best = i;
+            }
+          }
+          if (best >= 0) setTickIdx(best);
+          return;
+        }
         const ts = ref.timestamps;
         if (ts.length < 2) return;
         let lo = 0;
@@ -79,8 +112,17 @@ export function mountPriceChart({
       return;
     }
     legendEl.innerHTML = currentLegend
-      .map((s, i) => {
-        const v = values ? values[i] : null;
+      .map((s) => {
+        let v = null;
+        if (values && s.seriesIdx) {
+          for (const idx of s.seriesIdx) {
+            const candidate = values[idx];
+            if (candidate != null && Number.isFinite(candidate)) {
+              v = candidate;
+              break;
+            }
+          }
+        }
         const swatch = s.marker
           ? `<span class="legend-swatch marker-${s.marker}" style="background:${s.color};color:${s.color}"></span>`
           : s.dash
@@ -99,57 +141,53 @@ export function mountPriceChart({
 
   function computeModel(state, ref, product) {
     const ps = ref.series[product];
-    const xs = ps.timestamps;
-    const targetPts = state.prefs.showSampled ? 1500 : xs.length;
-    const sample = (ys) => lttb(xs, ys, targetPts);
+    const overlay = !!state.prefs.priceOverlayDays;
+    const dayOffset = DAY_OFFSET_PER_DAY[product] ?? 0;
+    const targetPts = state.prefs.showSampled ? 1500 : ps.timestamps.length;
+    // `priceJoinGaps` defaults to true (existing behavior — connect across
+    // missing samples). When false, NaNs lift the pen and leave visible gaps.
+    const breakOnNaN = state.prefs.priceJoinGaps === false;
 
-    // Lines: best bid/ask are always on; L2/L3 and the three "mid"
-    // flavours each toggle independently via prefs.
-    const bb = sample(ps.bestBid);
-    const aa = sample(ps.bestAsk);
+    // In overlay mode, each metric becomes N sub-series (one per day)
+    // plotted against raw ts; otherwise a single series against tickKey.
+    // Roots-style products get a per-day y-offset removed so the daily
+    // price patterns sit on the same y range.
+    const segments = buildSegments(ref, overlay);
+    const makeSeries = (ys, baseProps) => {
+      if (!overlay) {
+        const r = lttb(segments[0].xs, ys, targetPts);
+        return [{ ...baseProps, breakOnNaN, xs: r.xs, ys: r.ys }];
+      }
+      const out = [];
+      for (const seg of segments) {
+        const raw = ys.slice(seg.start, seg.end);
+        const segYs = dayOffset
+          ? raw.map((v) => (Number.isFinite(v) ? v - seg.day * dayOffset : v))
+          : raw;
+        const r = lttb(seg.xs, segYs, targetPts);
+        out.push({ ...baseProps, breakOnNaN, xs: r.xs, ys: r.ys });
+      }
+      return out;
+    };
 
-    const series = [
-      { name: "Best ask (L1)", color: "#f87171", width: 1.2, xs: aa.xs, ys: aa.ys },
-      { name: "Best bid (L1)", color: "#34d399", width: 1.2, xs: bb.xs, ys: bb.ys },
-    ];
+    const series = [];
+    series.push(...makeSeries(ps.bestAsk, { name: "Best ask (L1)", color: "#f87171", width: 1.2 }));
+    series.push(...makeSeries(ps.bestBid, { name: "Best bid (L1)", color: "#34d399", width: 1.2 }));
 
     if (state.prefs.priceLevels !== false) {
-      const b2 = sample(ps.bidPrices?.[1] ?? []);
-      const b3 = sample(ps.bidPrices?.[2] ?? []);
-      const a2 = sample(ps.askPrices?.[1] ?? []);
-      const a3 = sample(ps.askPrices?.[2] ?? []);
-      series.push(
-        { name: "Ask L2", color: "#f8717199", width: 1, xs: a2.xs, ys: a2.ys },
-        { name: "Ask L3", color: "#f8717166", width: 1, xs: a3.xs, ys: a3.ys },
-        { name: "Bid L2", color: "#34d39999", width: 1, xs: b2.xs, ys: b2.ys },
-        { name: "Bid L3", color: "#34d39966", width: 1, xs: b3.xs, ys: b3.ys }
-      );
+      series.push(...makeSeries(ps.askPrices?.[1] ?? [], { name: "Ask L2", color: "#f8717199", width: 1 }));
+      series.push(...makeSeries(ps.askPrices?.[2] ?? [], { name: "Ask L3", color: "#f8717166", width: 1 }));
+      series.push(...makeSeries(ps.bidPrices?.[1] ?? [], { name: "Bid L2", color: "#34d39999", width: 1 }));
+      series.push(...makeSeries(ps.bidPrices?.[2] ?? [], { name: "Bid L3", color: "#34d39966", width: 1 }));
     }
     if (state.prefs.priceMid !== false) {
-      const m = sample(ps.midPrice);
-      series.push({ name: "Mid", color: "#a78bfa", width: 1.6, xs: m.xs, ys: m.ys });
+      series.push(...makeSeries(ps.midPrice, { name: "Mid", color: "#a78bfa", width: 1.6 }));
     }
     if (state.prefs.priceMicro !== false) {
-      const mp = sample(ps.microPrice);
-      series.push({
-        name: "Microprice",
-        color: "#2dd4bf",
-        width: 1.2,
-        dash: [4, 3],
-        xs: mp.xs,
-        ys: mp.ys,
-      });
+      series.push(...makeSeries(ps.microPrice, { name: "Microprice", color: "#2dd4bf", width: 1.2, dash: [4, 3] }));
     }
     if (state.prefs.priceWallMid !== false) {
-      const wm = sample(ps.wallMid ?? []);
-      series.push({
-        name: "Wall mid",
-        color: "#fbbf24",
-        width: 1.2,
-        dash: [2, 4],
-        xs: wm.xs,
-        ys: wm.ys,
-      });
+      series.push(...makeSeries(ps.wallMid ?? [], { name: "Wall mid", color: "#fbbf24", width: 1.2, dash: [2, 4] }));
     }
 
     // Markers: SUBMISSION buys (^), SUBMISSION sells (v), bot trades (·).
@@ -162,21 +200,21 @@ export function mountPriceChart({
     const botYs = [];
     for (const t of ref.trades) {
       if (t.symbol !== product) continue;
-      // Line series plot against tickKey (day * DAY_STRIDE + ts), so
-      // trade markers must use the same axis or multi-day logs collapse
-      // every marker into the first day's x range.
-      const x = t.tickKey ?? t.timestamp;
+      // Overlay mode: x becomes raw ts and root-style prices shift down
+      // by day*offset so markers land on the overlaid price line.
+      const x = overlay ? t.timestamp : (t.tickKey ?? t.timestamp);
+      const y = overlay && dayOffset ? t.price - (t.day ?? 0) * dayOffset : t.price;
       const isBuy = t.buyer === "SUBMISSION";
       const isSell = t.seller === "SUBMISSION";
       if (isBuy) {
         ownBuysXs.push(x);
-        ownBuysYs.push(t.price);
+        ownBuysYs.push(y);
       } else if (isSell) {
         ownSellsXs.push(x);
-        ownSellsYs.push(t.price);
+        ownSellsYs.push(y);
       } else {
         botXs.push(x);
-        botYs.push(t.price);
+        botYs.push(y);
       }
     }
     // Own trades get a fat, high-contrast style so they jump out of
@@ -212,11 +250,24 @@ export function mountPriceChart({
         ys: botYs,
       });
 
-    currentLegend = series.map((s) => ({
-      name: s.name,
-      color: s.color,
-      dash: !!s.dash,
-    }));
+    // Dedupe legend by series name (overlay mode emits N sub-series per
+    // metric that should collapse into one legend row).
+    const legendByName = new Map();
+    for (let i = 0; i < series.length; i++) {
+      const s = series[i];
+      const existing = legendByName.get(s.name);
+      if (existing) {
+        existing.seriesIdx.push(i);
+      } else {
+        legendByName.set(s.name, {
+          name: s.name,
+          color: s.color,
+          dash: !!s.dash,
+          seriesIdx: [i],
+        });
+      }
+    }
+    currentLegend = Array.from(legendByName.values());
     for (const mk of markers) {
       currentLegend.push({
         name: `${mk.name} (${mk.xs.length})`,
@@ -246,6 +297,8 @@ export function mountPriceChart({
     buysCheck.checked = !!state.prefs.priceBuys;
     sellsCheck.checked = !!state.prefs.priceSells;
     botsCheck.checked = !!state.prefs.priceBots;
+    overlayCheck.checked = !!state.prefs.priceOverlayDays;
+    joinGapsCheck.checked = state.prefs.priceJoinGaps !== false;
 
     if (!ref || !product) {
       if (chart) {
@@ -274,13 +327,18 @@ export function mountPriceChart({
       !!state.prefs.priceBuys,
       !!state.prefs.priceSells,
       !!state.prefs.priceBots,
+      !!state.prefs.priceOverlayDays,
+      state.prefs.priceJoinGaps !== false,
     ].join("|");
     if (key !== lastKey) {
       chart.setData(computeModel(state, ref, product));
       lastKey = key;
       renderLegend(null);
     }
-    chart.setCursorX(ref.timestamps[state.tickIdx] ?? 0);
+    const cursorX = state.prefs.priceOverlayDays
+      ? ref.rawTimestamps[state.tickIdx] ?? 0
+      : ref.timestamps[state.tickIdx] ?? 0;
+    chart.setCursorX(cursorX);
   }
 
   subscribe(render);
@@ -293,3 +351,34 @@ function escapeHtml(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
+/**
+ * Split the flat per-tick arrays into per-day segments (for overlay mode)
+ * or return a single segment spanning everything (for side-by-side mode).
+ * Each segment carries its own xs array already built from either raw ts
+ * (overlay) or tickKey (side-by-side), so the caller can plot directly.
+ */
+function buildSegments(ref, overlay) {
+  const days = ref.days ?? [];
+  const rawTs = ref.rawTimestamps ?? [];
+  const tickKeys = ref.timestamps ?? [];
+  const len = tickKeys.length;
+  if (!overlay || len === 0) {
+    return [{ day: days[0] ?? 0, start: 0, end: len, xs: tickKeys }];
+  }
+  const segs = [];
+  let start = 0;
+  for (let i = 1; i <= len; i++) {
+    if (i === len || days[i] !== days[start]) {
+      segs.push({
+        day: days[start] ?? 0,
+        start,
+        end: i,
+        xs: rawTs.slice(start, i),
+      });
+      start = i;
+    }
+  }
+  return segs;
+}
+

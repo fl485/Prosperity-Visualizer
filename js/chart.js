@@ -361,12 +361,16 @@ export function createChart(canvas, opts = {}) {
       const xs = s.xs;
       const ys = s.ys;
       const len = Math.min(xs.length, ys.length);
+      const breakOnNaN = !!s.breakOnNaN;
       for (let i = 0; i < len; i++) {
         const y = ys[i];
-        // Skip NaN points without lifting the pen — joins the line
-        // across gaps so you see continuous series instead of
-        // hundreds of short segments when a level disappears briefly.
-        if (!Number.isFinite(y)) continue;
+        // Default: skip NaN points without lifting the pen, so a single
+        // missing sample doesn't shatter the line into hundreds of short
+        // segments. With breakOnNaN the pen lifts, leaving visible gaps.
+        if (!Number.isFinite(y)) {
+          if (breakOnNaN) penDown = false;
+          continue;
+        }
         const X = px(xs[i]);
         const Y = py(y);
         if (!penDown) {
