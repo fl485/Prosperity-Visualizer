@@ -24,19 +24,17 @@ export function mountKpi(el) {
     const showProd = selectedProduct ?? ref.products[0];
     const micro = ref.series[showProd]?.microPrice[tickIdx] ?? NaN;
 
-    const perProduct = ref.products
-      .filter((p) => !selectedProduct || selectedProduct === p)
-      .map((p) => {
-        const arr = ref.series[p].pnl;
-        let v = 0;
-        for (let i = tickIdx; i >= 0; i--) {
-          if (Number.isFinite(arr[i])) {
-            v = arr[i];
-            break;
-          }
+    const perProduct = ref.products.map((p) => {
+      const arr = ref.series[p].pnl;
+      let v = 0;
+      for (let i = tickIdx; i >= 0; i--) {
+        if (Number.isFinite(arr[i])) {
+          v = arr[i];
+          break;
         }
-        return { p, v };
-      });
+      }
+      return { p, v };
+    });
 
     const kpis = [
       {
@@ -63,12 +61,10 @@ export function mountKpi(el) {
         label: "Trades",
         value: `<span class="num">${fmtInt(ref.summary.tradeCount)}</span>`,
       },
-      ...(perProduct.length > 1
-        ? perProduct.map((pp) => ({
-            label: `PnL · ${pp.p}`,
-            value: `<span class="${pp.v >= 0 ? "positive" : "negative"}">${fmtSigned(pp.v)}</span>`,
-          }))
-        : []),
+      ...perProduct.map((pp) => ({
+        label: `PnL · ${pp.p}`,
+        value: `<span class="${pp.v >= 0 ? "positive" : "negative"}">${fmtSigned(pp.v)}</span>`,
+      })),
     ];
 
     el.innerHTML = kpis

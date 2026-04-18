@@ -162,16 +162,20 @@ export function mountPriceChart({
     const botYs = [];
     for (const t of ref.trades) {
       if (t.symbol !== product) continue;
+      // Line series plot against tickKey (day * DAY_STRIDE + ts), so
+      // trade markers must use the same axis or multi-day logs collapse
+      // every marker into the first day's x range.
+      const x = t.tickKey ?? t.timestamp;
       const isBuy = t.buyer === "SUBMISSION";
       const isSell = t.seller === "SUBMISSION";
       if (isBuy) {
-        ownBuysXs.push(t.timestamp);
+        ownBuysXs.push(x);
         ownBuysYs.push(t.price);
       } else if (isSell) {
-        ownSellsXs.push(t.timestamp);
+        ownSellsXs.push(x);
         ownSellsYs.push(t.price);
       } else {
-        botXs.push(t.timestamp);
+        botXs.push(x);
         botYs.push(t.price);
       }
     }

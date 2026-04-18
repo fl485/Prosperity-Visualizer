@@ -95,15 +95,29 @@ export function mountPnlChart({
     void cursor;
   }
 
+  function pnlSeriesFor(strat, selectedProduct) {
+    if (!selectedProduct || !strat.series[selectedProduct]) {
+      return strat.totalPnl;
+    }
+    const src = strat.series[selectedProduct].pnl;
+    const out = new Array(src.length);
+    let last = 0;
+    for (let i = 0; i < src.length; i++) {
+      if (Number.isFinite(src[i])) last = src[i];
+      out[i] = last;
+    }
+    return out;
+  }
+
   function computeModel(state) {
     const ref = getReference(state);
     if (!ref) return null;
-    const { prefs, strategies, comparingIds } = state;
+    const { prefs, strategies, comparingIds, selectedProduct } = state;
     const compareList = strategies.filter(
       (s) => comparingIds.has(s.id) && s.id !== ref.id
     );
     const refXs = ref.timestamps;
-    const refYs = ref.totalPnl;
+    const refYs = pnlSeriesFor(ref, selectedProduct);
 
     function project(strat) {
       const xsBase = prefs.normalizedX
@@ -111,7 +125,7 @@ export function mountPnlChart({
             strat.timestamps.length > 1 ? i / (strat.timestamps.length - 1) : 0
           )
         : strat.timestamps;
-      let ys = strat.totalPnl;
+      let ys = pnlSeriesFor(strat, selectedProduct);
       if (prefs.diffMode && strat.id !== ref.id) {
         const out = new Array(xsBase.length);
         if (prefs.normalizedX) {
@@ -187,7 +201,9 @@ export function mountPnlChart({
       "|" +
       state.prefs.normalizedX +
       "|" +
-      state.prefs.showSampled;
+      state.prefs.showSampled +
+      "|" +
+      (state.selectedProduct ?? "");
     if (key !== lastKey) {
       chart.setData(computeModel(state));
       lastKey = key;

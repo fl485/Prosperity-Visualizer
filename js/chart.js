@@ -214,6 +214,24 @@ export function createChart(canvas, opts = {}) {
         }
       }
     }
+    // Markers (own trades, bot trades) should also drive the y range so
+    // fills outside the current quote band aren't clipped out of view.
+    if (model.markers) {
+      for (const mk of model.markers) {
+        const xs = mk.xs;
+        const ys = mk.ys;
+        const len = Math.min(xs.length, ys.length);
+        for (let i = 0; i < len; i++) {
+          const x = xs[i];
+          if (x < visXmin || x > visXmax) continue;
+          const y = ys[i];
+          if (Number.isFinite(y)) {
+            if (y < ymin) ymin = y;
+            if (y > ymax) ymax = y;
+          }
+        }
+      }
+    }
     if (!Number.isFinite(ymin)) {
       ymin = 0;
       ymax = 1;
