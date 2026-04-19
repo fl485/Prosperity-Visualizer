@@ -1147,3 +1147,5 @@ table.data .empty {
 /* ==== own fills table ==== */
 .fills-row-buy .side { color: var(--c-positive); }
 .fills-row-sell .side { color: var(--c-negative); }
+.fills-row-bot { color: var(--c-text-mute); }
+.fills-row-bot .side { color: var(--c-text-mute); }

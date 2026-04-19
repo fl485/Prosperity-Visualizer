@@ -5,7 +5,6 @@ import {
   setPrefs,
   setTickIdx,
 } from "../store.js";
-import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
 import { downloadCanvasPng } from "../exporters.js";
 
@@ -145,7 +144,7 @@ export function mountPnlChart({
         }
         ys = out;
       }
-      return prefs.showSampled ? lttb(xsBase, ys, TARGET_POINTS) : { xs: xsBase, ys };
+      return { xs: xsBase, ys };
     }
 
     const series = [
@@ -163,6 +162,7 @@ export function mountPnlChart({
           : Math.round(v).toLocaleString(),
       yFormat: (v) =>
         Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(0),
+      targetPoints: prefs.showSampled ? TARGET_POINTS : Infinity,
       series,
     };
   }

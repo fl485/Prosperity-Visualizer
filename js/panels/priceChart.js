@@ -5,7 +5,6 @@ import {
   setTickIdx,
   setPrefs,
 } from "../store.js";
-import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
 
 // Default toggle state lives in prefs so the user's choice persists.
@@ -143,7 +142,6 @@ export function mountPriceChart({
     const ps = ref.series[product];
     const overlay = !!state.prefs.priceOverlayDays;
     const dayOffset = DAY_OFFSET_PER_DAY[product] ?? 0;
-    const targetPts = state.prefs.showSampled ? 1500 : ps.timestamps.length;
     // `priceJoinGaps` defaults to true (existing behavior — connect across
     // missing samples). When false, NaNs lift the pen and leave visible gaps.
     const breakOnNaN = state.prefs.priceJoinGaps === false;
@@ -155,8 +153,7 @@ export function mountPriceChart({
     const segments = buildSegments(ref, overlay);
     const makeSeries = (ys, baseProps) => {
       if (!overlay) {
-        const r = lttb(segments[0].xs, ys, targetPts);
-        return [{ ...baseProps, breakOnNaN, xs: r.xs, ys: r.ys }];
+        return [{ ...baseProps, breakOnNaN, xs: segments[0].xs, ys }];
       }
       const out = [];
       for (const seg of segments) {
@@ -164,8 +161,7 @@ export function mountPriceChart({
         const segYs = dayOffset
           ? raw.map((v) => (Number.isFinite(v) ? v - seg.day * dayOffset : v))
           : raw;
-        const r = lttb(seg.xs, segYs, targetPts);
-        out.push({ ...baseProps, breakOnNaN, xs: r.xs, ys: r.ys });
+        out.push({ ...baseProps, breakOnNaN, xs: seg.xs, ys: segYs });
       }
       return out;
     };
@@ -279,6 +275,7 @@ export function mountPriceChart({
     return {
       xFormat: (v) => Math.round(v).toLocaleString(),
       yFormat: (v) => v.toFixed(1),
+      targetPoints: state.prefs.showSampled ? 1500 : Infinity,
       series,
       markers,
     };

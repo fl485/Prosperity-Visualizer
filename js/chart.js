@@ -10,6 +10,10 @@
  *   });
  *   chart.setData({
  *     xFormat, yFormat,
+ *     targetPoints,                // optional — per-render LTTB target for
+ *                                  //   each series' visible slice (default
+ *                                  //   2000). Pass Infinity to disable
+ *                                  //   downsampling (draw every point).
  *     series: [{ name, color, xs, ys, width?, dash? }],
  *     limitLines: [{ value, color, dash? }],
  *   });
@@ -18,7 +22,10 @@
  *   chart.resetXView();          // back to full
  */
 
+import { lttb } from "./downsample.js";
+
 const DPR = window.devicePixelRatio || 1;
+const DEFAULT_TARGET_POINTS = 2000;
 const DRAG_THRESHOLD = 4; // px before a drag is treated as a zoom
 
 export function createChart(canvas, opts = {}) {
@@ -167,38 +174,47 @@ export function createChart(canvas, opts = {}) {
     return xView ? xView[1] : model._xmax;
   }
 
-  function computeBounds() {
-    let xmin = Infinity,
-      xmax = -Infinity;
-    for (const s of model.series) {
-      for (let i = 0; i < s.xs.length; i++) {
-        const x = s.xs[i];
-        if (Number.isFinite(x)) {
-          if (x < xmin) xmin = x;
-          if (x > xmax) xmax = x;
-        }
-      }
+  // Binary search: leftmost index with arr[i] >= target.
+  function lowerBound(arr, target) {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (arr[mid] < target) lo = mid + 1;
+      else hi = mid;
     }
-    if (!Number.isFinite(xmin)) {
-      xmin = 0;
-      xmax = 1;
-    }
-    if (xmin === xmax) xmax = xmin + 1;
-    model._xmin = xmin;
-    model._xmax = xmax;
+    return lo;
+  }
 
-    // y bounds only over currently visible x range
+  // Visible index range in a series' xs, extended by one on each side so
+  // the polyline leaves the viewport naturally. Assumes xs is sorted.
+  function visibleIndexRange(xs, visXmin, visXmax) {
+    const len = xs.length;
+    if (!len) return [0, 0];
+    let i0 = lowerBound(xs, visXmin);
+    let i1 = lowerBound(xs, visXmax);
+    if (i0 > 0) i0--;
+    if (i1 < len) i1++;
+    return [i0, i1];
+  }
+
+  function computeBounds() {
     const visXmin = visibleXMin();
     const visXmax = visibleXMax();
+
+    // y bounds only over currently visible x range. Use binary search to
+    // restrict the scan — xs are monotonic so this stays cheap even for
+    // raw (un-downsampled) datasets passed in by callers.
     let ymin = Infinity,
       ymax = -Infinity;
     for (const s of model.series) {
       const xs = s.xs;
       const ys = s.ys;
       const len = Math.min(xs.length, ys.length);
-      for (let i = 0; i < len; i++) {
-        const x = xs[i];
-        if (x < visXmin || x > visXmax) continue;
+      if (!len) continue;
+      const [i0, i1] = visibleIndexRange(xs, visXmin, visXmax);
+      const hi = Math.min(i1, len);
+      for (let i = i0; i < hi; i++) {
         const y = ys[i];
         if (Number.isFinite(y)) {
           if (y < ymin) ymin = y;
@@ -347,7 +363,10 @@ export function createChart(canvas, opts = {}) {
       ctx.restore();
     }
 
-    // Series (clipped)
+    // Series (clipped). For each series we slice to the visible x-range and
+    // run LTTB against that slice, so zooming in resamples at the new scale
+    // instead of reusing a coarse pre-downsampled dataset.
+    const targetPoints = model.targetPoints ?? DEFAULT_TARGET_POINTS;
     ctx.save();
     ctx.beginPath();
     ctx.rect(plot.left, plot.top, plot.width, plot.height);
@@ -362,8 +381,30 @@ export function createChart(canvas, opts = {}) {
       const ys = s.ys;
       const len = Math.min(xs.length, ys.length);
       const breakOnNaN = !!s.breakOnNaN;
-      for (let i = 0; i < len; i++) {
-        const y = ys[i];
+      const [i0, i1] = visibleIndexRange(xs, xmin, xmax);
+      const hi = Math.min(i1, len);
+      const sliceLen = Math.max(0, hi - i0);
+      let drawXs = xs;
+      let drawYs = ys;
+      let drawStart = i0;
+      let drawEnd = hi;
+      // LTTB only kicks in when the visible slice has more points than the
+      // target; below that threshold we draw the raw slice as-is.
+      if (
+        Number.isFinite(targetPoints) &&
+        targetPoints >= 3 &&
+        sliceLen > targetPoints
+      ) {
+        const sxs = xs.slice(i0, hi);
+        const sys = ys.slice(i0, hi);
+        const r = lttb(sxs, sys, targetPoints);
+        drawXs = r.xs;
+        drawYs = r.ys;
+        drawStart = 0;
+        drawEnd = drawXs.length;
+      }
+      for (let i = drawStart; i < drawEnd; i++) {
+        const y = drawYs[i];
         // Default: skip NaN points without lifting the pen, so a single
         // missing sample doesn't shatter the line into hundreds of short
         // segments. With breakOnNaN the pen lifts, leaving visible gaps.
@@ -371,7 +412,7 @@ export function createChart(canvas, opts = {}) {
           if (breakOnNaN) penDown = false;
           continue;
         }
-        const X = px(xs[i]);
+        const X = px(drawXs[i]);
         const Y = py(y);
         if (!penDown) {
           ctx.moveTo(X, Y);
@@ -517,6 +558,28 @@ export function createChart(canvas, opts = {}) {
   }
 
   function setData(m) {
+    // Cache x bounds once; they don't change between renders and the raw
+    // series arrays can be large (hundreds of thousands of points when the
+    // caller lets the chart do its own viewport-aware downsampling).
+    let xmin = Infinity;
+    let xmax = -Infinity;
+    for (const s of m.series) {
+      const xs = s.xs;
+      for (let i = 0; i < xs.length; i++) {
+        const x = xs[i];
+        if (Number.isFinite(x)) {
+          if (x < xmin) xmin = x;
+          if (x > xmax) xmax = x;
+        }
+      }
+    }
+    if (!Number.isFinite(xmin)) {
+      xmin = 0;
+      xmax = 1;
+    }
+    if (xmin === xmax) xmax = xmin + 1;
+    m._xmin = xmin;
+    m._xmax = xmax;
     model = m;
     render();
   }

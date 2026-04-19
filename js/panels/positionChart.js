@@ -5,7 +5,6 @@ import {
   setPositionLimit,
   setTickIdx,
 } from "../store.js";
-import { lttb } from "../downsample.js";
 import { createChart } from "../chart.js";
 
 export function mountPositionChart({
@@ -79,13 +78,11 @@ export function mountPositionChart({
       if (!s.series[product]) return;
       const xs = s.timestamps;
       const ys = s.series[product].position;
-      const target = state.prefs.showSampled ? 1200 : xs.length;
-      const r = lttb(xs, ys, target);
       series.push({
         name: s.name,
         color: s.color,
-        xs: r.xs,
-        ys: r.ys,
+        xs,
+        ys,
         width: s.id === ref.id ? 2 : 1,
       });
     }
@@ -98,6 +95,7 @@ export function mountPositionChart({
     return {
       xFormat: (v) => Math.round(v).toLocaleString(),
       yFormat: (v) => v.toFixed(0),
+      targetPoints: state.prefs.showSampled ? 1200 : Infinity,
       series,
       limitLines: [
         { value: limit, color: "rgba(244,63,94,0.6)", dash: [3, 3] },

@@ -32,7 +32,17 @@ export function mountOwnFills({ bodyEl, titleEl, showAllInput, currentOnlyInput 
     }
     const tickIdx = state.tickIdx;
     const rawTs = ref.rawTimestamps[tickIdx] ?? 0;
-    let fills = ref.ownFills;
+    const botFills = (ref.trades ?? [])
+      .filter((t) => t.buyer !== "SUBMISSION" && t.seller !== "SUBMISSION")
+      .map((t) => ({
+        timestamp: t.timestamp,
+        product: t.symbol,
+        side: "bot",
+        price: t.price,
+        quantity: t.quantity,
+        cashFlow: 0,
+      }));
+    let fills = ref.ownFills.concat(botFills);
     if (state.selectedProduct)
       fills = fills.filter((f) => f.product === state.selectedProduct);
     if (state.fillsCurrentOnly) {
@@ -42,23 +52,28 @@ export function mountOwnFills({ bodyEl, titleEl, showAllInput, currentOnlyInput 
       const hi = rawTs + 500;
       fills = fills.filter((f) => f.timestamp >= lo && f.timestamp <= hi);
     }
+    fills.sort((a, b) => a.timestamp - b.timestamp);
 
     const rows =
       fills.length === 0
         ? `<tr><td class="empty" colspan="6">No fills in this window.</td></tr>`
         : fills
-            .map(
-              (f) => `
+            .map((f) => {
+              const isBot = f.side === "bot";
+              const cashCell = isBot
+                ? `<td class="num muted">—</td>`
+                : `<td class="num ${f.cashFlow >= 0 ? "positive" : "negative"}">${f.cashFlow >= 0 ? "+" : ""}${f.cashFlow.toFixed(0)}</td>`;
+              return `
       <tr class="fills-row-${f.side}">
         <td class="left num muted">${f.timestamp}</td>
         <td class="left side">${f.side.toUpperCase()}</td>
         <td class="left">${f.product}</td>
         <td class="num">${f.price.toFixed(1)}</td>
         <td class="num">${f.quantity}</td>
-        <td class="num ${f.cashFlow >= 0 ? "positive" : "negative"}">${f.cashFlow >= 0 ? "+" : ""}${f.cashFlow.toFixed(0)}</td>
+        ${cashCell}
       </tr>
-    `
-            )
+    `;
+            })
             .join("");
 
     bodyEl.innerHTML = `
